@@ -1,0 +1,18 @@
+﻿# Python
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+
+# Training artifacts
+samples/
+samples_1/
+checkpoints/
+pokemon/
+
+# Temp helpers
+.tmp/
+_dl_*.py
+_pypi_json.py
+*.whl
