@@ -121,14 +121,16 @@ def parse_args():
     parser.add_argument("--beta1", type=float, default=0.5)
     parser.add_argument("--z_dim", type=int, default=128)
     parser.add_argument("--sample_interval", type=int, default=1)
+    parser.add_argument("--samples_dir", type=str, default="samples")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints")
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint if it exists.")
     parser.add_argument(
         "--latest_ckpt",
         type=str,
-        default="checkpoints/latest.pt",
-        help="Path to the latest training checkpoint file.",
+        default="",
+        help="Path to the latest training checkpoint file. Defaults to <checkpoints_dir>/latest.pt",
     )
     return parser.parse_args()
 
@@ -139,11 +141,11 @@ def main():
     np.random.seed(args.seed)
 
     data_dir = Path(args.data_dir)
-    sample_dir = Path("samples")
-    ckpt_dir = Path("checkpoints")
+    sample_dir = Path(args.samples_dir)
+    ckpt_dir = Path(args.checkpoints_dir)
     sample_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    latest_ckpt_path = Path(args.latest_ckpt)
+    latest_ckpt_path = Path(args.latest_ckpt) if args.latest_ckpt else ckpt_dir / "latest.pt"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
