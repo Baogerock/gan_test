@@ -148,6 +148,8 @@ def parse_args():
     p.add_argument("--beta1", type=float, default=0.5)
     p.add_argument("--beta2", type=float, default=0.999)
     p.add_argument("--sample_interval", type=int, default=1)
+    p.add_argument("--samples_dir", type=str, default="samples")
+    p.add_argument("--checkpoints_dir", type=str, default="checkpoints")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--ema_decay", type=float, default=0.995)
@@ -162,8 +164,8 @@ def parse_args():
     p.add_argument(
         "--latest_ckpt",
         type=str,
-        default="checkpoints/latest.pt",
-        help="Path to the latest training checkpoint file.",
+        default="",
+        help="Path to the latest training checkpoint file. Defaults to <checkpoints_dir>/latest.pt",
     )
     return p.parse_args()
 
@@ -177,11 +179,11 @@ def main():
     if not data_dir.exists():
         raise FileNotFoundError(f"Dataset directory not found: {data_dir}")
 
-    sample_dir = Path("samples")
-    ckpt_dir = Path("checkpoints")
+    sample_dir = Path(args.samples_dir)
+    ckpt_dir = Path(args.checkpoints_dir)
     sample_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    latest_ckpt_path = Path(args.latest_ckpt)
+    latest_ckpt_path = Path(args.latest_ckpt) if args.latest_ckpt else ckpt_dir / "latest.pt"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
