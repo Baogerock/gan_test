@@ -9,8 +9,10 @@ __pycache__/
 samples/
 samples_1/
 samples*/
+diff_samples/
 checkpoints/
 checkpoints*/
+diff_checkpoints/
 pokemon/
 
 # Temp helpers
