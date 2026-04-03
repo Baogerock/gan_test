@@ -8,7 +8,9 @@ __pycache__/
 # Training artifacts
 samples/
 samples_1/
+samples*/
 checkpoints/
+checkpoints*/
 pokemon/
 
 # Temp helpers
