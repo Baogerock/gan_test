@@ -14,9 +14,16 @@ checkpoints/
 checkpoints*/
 diff_checkpoints/
 pokemon/
+animefaces/
+checkpoint/
+sample/
+diff_*_ckpt/
+diff_*_samples/
 
 # Temp helpers
 .tmp/
 _dl_*.py
 _pypi_json.py
+_pypi_wheels.py
+_download_wheels.py
 *.whl

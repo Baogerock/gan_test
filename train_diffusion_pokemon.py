@@ -19,7 +19,7 @@ def list_images(root: Path):
     return [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
 
 
-class PokemonDataset(Dataset):
+class ImageDataset(Dataset):
     def __init__(self, root: Path, image_size: int = 64):
         self.image_paths = list_images(root)
         if not self.image_paths:
@@ -64,13 +64,10 @@ class ResBlock(nn.Module):
         self.norm1 = nn.GroupNorm(groups, in_ch)
         self.act1 = nn.SiLU()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-
         self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_dim, out_ch))
-
         self.norm2 = nn.GroupNorm(groups, out_ch)
         self.act2 = nn.SiLU()
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-
         self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
 
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor):
@@ -89,49 +86,36 @@ class TinyUNet(nn.Module):
             nn.SiLU(),
             nn.Linear(time_dim, time_dim),
         )
-
         self.init_conv = nn.Conv2d(in_ch, base, 3, padding=1)
-
         self.down1 = ResBlock(base, base, time_dim)
         self.downsample1 = nn.Conv2d(base, base, 4, stride=2, padding=1)
-
         self.down2 = ResBlock(base, base * 2, time_dim)
         self.downsample2 = nn.Conv2d(base * 2, base * 2, 4, stride=2, padding=1)
-
         self.mid1 = ResBlock(base * 2, base * 4, time_dim)
         self.mid2 = ResBlock(base * 4, base * 2, time_dim)
-
         self.upsample1 = nn.ConvTranspose2d(base * 2, base * 2, 4, stride=2, padding=1)
         self.up1 = ResBlock(base * 4, base, time_dim)
-
         self.upsample2 = nn.ConvTranspose2d(base, base, 4, stride=2, padding=1)
         self.up2 = ResBlock(base * 2, base, time_dim)
-
         self.out_norm = nn.GroupNorm(8, base)
         self.out_act = nn.SiLU()
         self.out_conv = nn.Conv2d(base, in_ch, 3, padding=1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         t_emb = self.time_mlp(t)
-
         x = self.init_conv(x)
         s1 = self.down1(x, t_emb)
         x = self.downsample1(s1)
-
         s2 = self.down2(x, t_emb)
         x = self.downsample2(s2)
-
         x = self.mid1(x, t_emb)
         x = self.mid2(x, t_emb)
-
         x = self.upsample1(x)
         x = torch.cat([x, s2], dim=1)
         x = self.up1(x, t_emb)
-
         x = self.upsample2(x)
         x = torch.cat([x, s1], dim=1)
         x = self.up2(x, t_emb)
-
         x = self.out_conv(self.out_act(self.out_norm(x)))
         return x
 
@@ -163,21 +147,17 @@ def ddim_sample(model, schedule: DiffusionSchedule, device: torch.device, n: int
     with torch.no_grad():
         x = torch.randn(n, 3, image_size, image_size, device=device)
         step_indices = torch.linspace(schedule.timesteps - 1, 0, sample_steps, device=device).long()
-
         for i, t_now in enumerate(step_indices):
             t = torch.full((n,), t_now, device=device, dtype=torch.long)
             eps = model(x, t)
-
             a_t = schedule.alphas_cumprod[t_now]
             if i == len(step_indices) - 1:
                 a_prev = torch.tensor(1.0, device=device)
             else:
                 t_prev = step_indices[i + 1]
                 a_prev = schedule.alphas_cumprod[t_prev]
-
             x0_pred = (x - torch.sqrt(1 - a_t) * eps) / torch.sqrt(a_t)
             x = torch.sqrt(a_prev) * x0_pred + torch.sqrt(1 - a_prev) * eps
-
         x = x.clamp(-1, 1)
     model.train()
     return x
@@ -192,8 +172,8 @@ def update_ema(ema_model, model, decay=0.999):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train diffusion model on Pokemon")
-    p.add_argument("--data_dir", type=str, default="pokemon")
+    p = argparse.ArgumentParser(description="Train diffusion model (supports pretrained checkpoint finetune)")
+    p.add_argument("--dataset_dir", type=str, default="pokemon", help="Training image folder")
     p.add_argument("--image_size", type=int, default=64)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--epochs", type=int, default=100)
@@ -211,9 +191,29 @@ def parse_args():
     p.add_argument("--latest_ckpt", type=str, default="")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--sample_from_ema", action="store_true")
+    p.add_argument("--pretrained_ckpt", type=str, default="", help="Load model weights from a pretrained checkpoint")
+    p.add_argument("--pretrained_use_ema", action="store_true", help="When loading pretrained_ckpt, prefer ema_model weights")
+    p.add_argument("--reset_optimizer", action="store_true", help="Do not load optimizer state when using --resume")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
+
+
+def load_pretrained_weights(args, model, ema_model, device):
+    if not args.pretrained_ckpt:
+        return
+    ckpt_path = Path(args.pretrained_ckpt)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"pretrained_ckpt not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location=device)
+    key = "ema_model" if args.pretrained_use_ema and "ema_model" in ckpt else "model"
+    model.load_state_dict(ckpt[key], strict=False)
+    if "ema_model" in ckpt:
+        ema_model.load_state_dict(ckpt["ema_model"], strict=False)
+    else:
+        ema_model.load_state_dict(model.state_dict(), strict=False)
+    print(f"Loaded pretrained weights from: {ckpt_path} (key={key})")
 
 
 def main():
@@ -221,7 +221,7 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    data_dir = Path(args.data_dir)
+    data_dir = Path(args.dataset_dir)
     if not data_dir.exists():
         raise FileNotFoundError(f"Dataset directory not found: {data_dir}")
 
@@ -236,7 +236,7 @@ def main():
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    dataset = PokemonDataset(data_dir, image_size=args.image_size)
+    dataset = ImageDataset(data_dir, image_size=args.image_size)
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -261,9 +261,12 @@ def main():
         ckpt = torch.load(latest_ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model"])
         ema_model.load_state_dict(ckpt.get("ema_model", ckpt["model"]))
-        optimizer.load_state_dict(ckpt["optimizer"])
+        if not args.reset_optimizer:
+            optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = int(ckpt["epoch"]) + 1
         print(f"Resumed from checkpoint: {latest_ckpt_path} (next epoch: {start_epoch})")
+    elif args.pretrained_ckpt:
+        load_pretrained_weights(args, model, ema_model, device)
 
     for epoch in range(start_epoch, args.epochs + 1):
         running_loss = 0.0
