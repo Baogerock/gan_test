@@ -19,6 +19,9 @@ checkpoint/
 sample/
 diff_*_ckpt/
 diff_*_samples/
+sd_*_ckpt/
+sd_*_samples/
+.hf_cache/
 
 # Temp helpers
 .tmp/
