@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from PIL import Image
 from torchvision.utils import make_grid, save_image
 
 
@@ -94,11 +95,29 @@ class DiffusionSchedule:
         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
 
 
-def ddim_sample(model, schedule: DiffusionSchedule, device: torch.device, n: int, sample_steps: int, image_size: int):
+def ddim_sample(
+    model,
+    schedule: DiffusionSchedule,
+    device: torch.device,
+    n: int,
+    sample_steps: int,
+    image_size: int,
+    capture_steps: int = 0,
+):
     model.eval()
+    captured = []
     with torch.no_grad():
         x = torch.randn(n, 3, image_size, image_size, device=device)
         step_indices = torch.linspace(schedule.timesteps - 1, 0, sample_steps, device=device).long()
+
+        capture_set = set()
+        if capture_steps > 0:
+            picks = torch.linspace(0, len(step_indices) - 1, capture_steps, device=device).long().tolist()
+            capture_set = set(picks)
+            capture_set.add(0)
+            capture_set.add(len(step_indices) - 1)
+            captured.append(x.detach().cpu().clone())
+
         for i, t_now in enumerate(step_indices):
             t = torch.full((n,), t_now, device=device, dtype=torch.long)
             eps = model(x, t)
@@ -109,7 +128,32 @@ def ddim_sample(model, schedule: DiffusionSchedule, device: torch.device, n: int
                 a_prev = schedule.alphas_cumprod[step_indices[i + 1]]
             x0_pred = (x - torch.sqrt(1 - a_t) * eps) / torch.sqrt(a_t)
             x = torch.sqrt(a_prev) * x0_pred + torch.sqrt(1 - a_prev) * eps
-        return x.clamp(-1, 1)
+            if capture_steps > 0 and i in capture_set:
+                captured.append(x.detach().cpu().clone())
+
+        return x.clamp(-1, 1), captured
+
+
+def tensor_to_pil_grid(x: torch.Tensor, nrow: int = 4) -> Image.Image:
+    grid = make_grid((x.detach().cpu() + 1) / 2, nrow=nrow, padding=2).clamp(0, 1)
+    arr = (grid.permute(1, 2, 0).numpy() * 255).astype("uint8")
+    return Image.fromarray(arr)
+
+
+def save_denoise_gif(captured: list, out_path: Path, fps: float = 12.0):
+    if not captured:
+        return
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    frames = [tensor_to_pil_grid(x) for x in captured]
+    duration_ms = max(1, int(round(1000.0 / fps)))
+    frames[0].save(
+        out_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=False,
+    )
 
 
 def parse_args():
@@ -123,6 +167,10 @@ def parse_args():
     p.add_argument("--base_channels", type=int, default=64)
     p.add_argument("--time_dim", type=int, default=256)
     p.add_argument("--use_ema", action="store_true")
+    p.add_argument("--visualize_denoise", action="store_true", help="Save denoising-process GIF")
+    p.add_argument("--denoise_gif", type=str, default="", help="Output GIF path for denoising process")
+    p.add_argument("--denoise_frames", type=int, default=20, help="Captured frame count for denoising GIF")
+    p.add_argument("--denoise_fps", type=float, default=12.0, help="FPS for denoising-process GIF")
     p.add_argument("--seed", type=int, default=123)
     return p.parse_args()
 
@@ -145,13 +193,14 @@ def main():
     model.load_state_dict(ckpt[key])
 
     schedule = DiffusionSchedule(args.timesteps, device)
-    samples = ddim_sample(
+    samples, captured = ddim_sample(
         model,
         schedule,
         device=device,
         n=args.num_images,
         sample_steps=args.sample_steps,
         image_size=args.image_size,
+        capture_steps=(args.denoise_frames if args.visualize_denoise else 0),
     )
 
     out_path = Path(args.out)
@@ -159,6 +208,11 @@ def main():
     grid = make_grid((samples.detach().cpu() + 1) / 2, nrow=4, padding=2)
     save_image(grid, out_path)
     print(f"Saved inference image: {out_path.resolve()}")
+
+    if args.visualize_denoise:
+        gif_path = Path(args.denoise_gif) if args.denoise_gif else out_path.with_name(f"{out_path.stem}_denoise.gif")
+        save_denoise_gif(captured, gif_path, fps=args.denoise_fps)
+        print(f"Saved denoise process GIF: {gif_path.resolve()}")
 
 
 if __name__ == "__main__":
